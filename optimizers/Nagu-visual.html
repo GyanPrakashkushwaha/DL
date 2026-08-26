@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nesterov Accelerated Gradient (NAG) Visualization</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/MathJax.js?config=TeX-MML-AM_CHTML"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+            color: #334155;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .contour-path {
+            fill: none;
+            stroke-width: 1px;
+            opacity: 0.6;
+        }
+
+        /* Standard Momentum Colors */
+        .color-sm-path { stroke: #3b82f6; stroke-width: 2px; fill: none; }
+        .color-sm-point { fill: #2563eb; }
+        .color-sm-grad { stroke: #ef4444; stroke-width: 2px; }
+        .color-sm-mom { stroke: #10b981; stroke-width: 2px; }
+
+        /* NAG Colors */
+        .color-nag-path { stroke: #8b5cf6; stroke-width: 2px; fill: none; }
+        .color-nag-point { fill: #7c3aed; }
+        .color-nag-lookahead { fill: #f59e0b; }
+        .color-nag-lookahead-line { stroke: #f59e0b; stroke-width: 2px; stroke-dasharray: 4; }
+        .color-nag-grad { stroke: #ef4444; stroke-width: 2px; }
+        .color-nag-mom { stroke: #10b981; stroke-width: 2px; }
+
+        .tooltip {
+            position: absolute;
+            background-color: rgba(255, 255, 255, 0.95);
+            border: 1px solid #cbd5e1;
+            padding: 8px 12px;
+            border-radius: 6px;
+            pointer-events: none;
+            font-size: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 10;
+        }
+
+        .math-block {
+            background: #f1f5f9;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            margin-bottom: 1rem;
+            border-left: 4px solid #8b5cf6;
+        }
+
+        /* Control Panel Styles */
+        input[type=range] {
+            width: 100%;
+            accent-color: #8b5cf6;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .axis line, .axis path {
+            stroke: #cbd5e1;
+        }
+        
+        .axis text {
+            fill: #64748b;
+            font-size: 10px;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+        
+        <!-- Left Column: Explanation and Controls -->
+        <div class="lg:col-span-5 flex flex-col gap-6">
+            <div>
+                <h1 class="text-3xl font-bold text-slate-800 mb-2">Nesterov Accelerated Gradient</h1>
+                <p class="text-slate-600 mb-4">Understanding the "Lookahead" Step</p>
+                
+                <p class="text-sm mb-4">
+                    Both Standard Momentum and NAG use past gradients to build velocity. The key difference is <b>where</b> they calculate the current gradient.
+                </p>
+
+                <div class="space-y-4">
+                    <!-- Standard Momentum Math -->
+                    <div class="math-block" style="border-left-color: #3b82f6;">
+                        <h3 class="font-semibold text-sm text-blue-600 mb-2">1. Standard Momentum</h3>
+                        <p class="text-xs text-slate-500 mb-2">Calculates gradient at current position, then adds momentum.</p>
+                        <div class="text-sm">
+                            $$v_{t} = \gamma v_{t-1} + \eta \nabla J(\theta_{t})$$
+                            $$\theta_{t+1} = \theta_{t} - v_{t}$$
+                        </div>
+                    </div>
+
+                    <!-- NAG Math -->
+                    <div class="math-block">
+                        <h3 class="font-semibold text-sm text-purple-600 mb-2">2. Nesterov (NAG)</h3>
+                        <p class="text-xs text-slate-500 mb-2">Takes a "lookahead" step using momentum <i>first</i>, calculates gradient there, then makes the final update.</p>
+                        <div class="text-sm">
+                            $$ \text{Lookahead: } \tilde{\theta} = \theta_{t} - \gamma v_{t-1} $$
+                            $$v_{t} = \gamma v_{t-1} + \eta \nabla J(\tilde{\theta})$$
+                            $$\theta_{t+1} = \theta_{t} - v_{t}$$
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
+                <h3 class="font-semibold mb-4 text-slate-800">Controls</h3>
+                
+                <div class="space-y-5">
+                    <div>
+                        <label class="flex justify-between text-sm font-medium text-slate-700 mb-1">
+                            <span>Learning Rate ($\eta$)</span>
+                            <span id="lr-val">0.05</span>
+                        </label>
+                        <input type="range" id="lr-slider" min="0.01" max="0.15" step="0.01" value="0.05">
+                    </div>
+                    
+                    <div>
+                        <label class="flex justify-between text-sm font-medium text-slate-700 mb-1">
+                            <span>Momentum ($\gamma$)</span>
+                            <span id="mom-val">0.85</span>
+                        </label>
+                        <input type="range" id="mom-slider" min="0.1" max="0.99" step="0.01" value="0.85">
+                    </div>
+
+                    <div class="flex gap-2 pt-2">
+                        <button id="btn-reset" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition-colors w-1/3">Reset</button>
+                        <button id="btn-step" class="px-4 py-2 bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg text-sm font-medium transition-colors w-1/3">Step</button>
+                        <button id="btn-play" class="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm font-medium transition-colors w-1/3 flex justify-center items-center">
+                            <svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" fill-rule="evenodd"></path></svg>
+                            Play
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
+                <div class="grid grid-cols-2 gap-2 text-xs">
+                    <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-blue-600"></div> Standard Momentum</div>
+                    <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-red-600"></div> NAG Optimizer</div>
+                    <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-amber-500"></div> NAG Lookahead Point</div>
+                    <div class="flex items-center gap-2"><div class="w-3 h-0 border-t-2 border-red-500"></div> Gradient Vector</div>
+                    <div class="flex items-center gap-2"><div class="w-3 h-0 border-t-2 border-emerald-500"></div> Momentum Vector</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Visualization -->
+        <div class="lg:col-span-7 bg-white rounded-xl shadow-sm border border-slate-200 p-4 relative min-h-[500px] flex flex-col">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="font-semibold text-slate-800">Loss Landscape (Contour Map)</h3>
+                <div class="text-sm font-mono bg-slate-100 px-2 py-1 rounded text-slate-600" id="step-counter">Step: 0</div>
+            </div>
+            
+            <div id="vis-container" class="flex-grow relative w-full h-full min-h-[400px]">
+                <svg id="plot" width="100%" height="100%"></svg>
+            </div>
+            <div id="tooltip" class="tooltip"></div>
+        </div>
+    </div>
+
+    <script>
+        // --- Mathematical Setup ---
+        
+        // We use a skewed quadratic function to create a "ravine" landscape
+        // This is where Momentum and NAG show their differences best.
+        // f(x, y) = 0.5 * (a*x^2 + b*y^2)
+        const a = 1.0;  // Scale for x (shallow)
+        const b = 15.0; // Scale for y (steep)
+
+        function loss(x, y) {
+            return 0.5 * (a * x * x + b * y * y);
+        }
+
+        function gradient(x, y) {
+            return [a * x, b * y];
+        }
+
+        // --- State Management ---
+        const state = {
+            lr: 0.05,
+            gamma: 0.85,
+            startX: -8,
+            startY: 4,
+            step: 0,
+            isPlaying: false,
+            playInterval: null,
+            historySM: [],  // Standard Momentum history
+            historyNAG: []  // NAG history
+        };
+
+        // Initialize histories
+        function resetHistories() {
+            state.historySM = [{
+                x: state.startX, y: state.startY, vx: 0, vy: 0,
+                gx: 0, gy: 0
+            }];
+            state.historyNAG = [{
+                x: state.startX, y: state.startY, vx: 0, vy: 0,
+                lookaheadX: state.startX, lookaheadY: state.startY,
+                gx: 0, gy: 0
+            }];
+            state.step = 0;
+            updateStepCounter();
+        }
+
+        // --- Optimizer Logic ---
+
+        function stepStandardMomentum(prev) {
+            // 1. Calculate gradient at CURRENT position
+            const [gx, gy] = gradient(prev.x, prev.y);
+            
+            // 2. Update velocity (momentum + learning_rate * gradient)
+            const vx = state.gamma * prev.vx + state.lr * gx;
+            const vy = state.gamma * prev.vy + state.lr * gy;
+            
+            // 3. Update position
+            const x = prev.x - vx;
+            const y = prev.y - vy;
+            
+            return { x, y, vx, vy, gx, gy };
+        }
+
+        function stepNAG(prev) {
+            // 1. Calculate Lookahead position (apply momentum only)
+            const lookX = prev.x - state.gamma * prev.vx;
+            const lookY = prev.y - state.gamma * prev.vy;
+            
+            // 2. Calculate gradient at LOOKAHEAD position
+            const [gx, gy] = gradient(lookX, lookY);
+            
+            // 3. Update velocity
+            const vx = state.gamma * prev.vx + state.lr * gx;
+            const vy = state.gamma * prev.vy + state.lr * gy;
+            
+            // 4. Update position
+            const x = prev.x - vx;
+            const y = prev.y - vy;
+            
+            return { x, y, vx, vy, gx, gy, lookaheadX: lookX, lookaheadY: lookY };
+        }
+
+        function performStep() {
+            if (state.step >= 50) {
+                stopPlaying();
+                return;
+            }
+
+            const prevSM = state.historySM[state.historySM.length - 1];
+            const nextSM = stepStandardMomentum(prevSM);
+            state.historySM.push(nextSM);
+
+            const prevNAG = state.historyNAG[state.historyNAG.length - 1];
+            const nextNAG = stepNAG(prevNAG);
+            state.historyNAG.push(nextNAG);
+
+            state.step++;
+            updateStepCounter();
+            draw();
+        }
+
+        // --- Visualization Setup (D3.js) ---
+
+        const margin = {top: 20, right: 20, bottom: 30, left: 40};
+        let width, height;
+        let xScale, yScale;
+        const svg = d3.select("#plot");
+        const gMain = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+        
+        // Layers
+        const gContours = gMain.append("g").attr("class", "contours");
+        const gAxes = gMain.append("g").attr("class", "axes");
+        const gPaths = gMain.append("g").attr("class", "paths");
+        const gVectors = gMain.append("g").attr("class", "vectors");
+        const gPoints = gMain.append("g").attr("class", "points");
+        
+        const tooltip = d3.select("#tooltip");
+
+        // Define arrowhead marker
+        svg.append("defs").append("marker")
+            .attr("id", "arrowhead")
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 8)
+            .attr("refY", 0)
+            .attr("markerWidth", 6)
+            .attr("markerHeight", 6)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("d", "M0,-5L10,0L0,5")
+            .attr("fill", "currentColor");
+
+        function setupScales() {
+            const container = document.getElementById('vis-container');
+            const rect = container.getBoundingClientRect();
+            width = rect.width - margin.left - margin.right;
+            height = rect.height - margin.top - margin.bottom;
+
+            xScale = d3.scaleLinear().domain([-10, 10]).range([0, width]);
+            yScale = d3.scaleLinear().domain([-8, 8]).range([height, 0]);
+
+            // Draw Axes
+            gAxes.selectAll("*").remove();
+            gAxes.append("g")
+                .attr("class", "axis")
+                .attr("transform", `translate(0,${yScale(0)})`)
+                .call(d3.axisBottom(xScale).ticks(10));
+            
+            gAxes.append("g")
+                .attr("class", "axis")
+                .attr("transform", `translate(${xScale(0)},0)`)
+                .call(d3.axisLeft(yScale).ticks(8));
+        }
+
+        function generateContours() {
+            // Generate grid data for contours
+            const gridWidth = 100;
+            const gridHeight = 80;
+            const values = new Array(gridWidth * gridHeight);
+            
+            for (let j = 0, k = 0; j < gridHeight; ++j) {
+                for (let i = 0; i < gridWidth; ++i, ++k) {
+                    const x = xScale.invert(i * width / (gridWidth - 1));
+                    const y = yScale.invert(j * height / (gridHeight - 1));
+                    values[k] = loss(x, y);
+                }
+            }
+
+            // Define thresholds logarithmically to see steep valley better
+            const thresholds = [0.5, 2, 5, 10, 20, 50, 100, 200, 400];
+            const colorScale = d3.scaleSequentialLog(d3.interpolateGreys).domain([0.1, 500]);
+
+            const contours = d3.contours()
+                .size([gridWidth, gridHeight])
+                .thresholds(thresholds)
+                (values);
+
+            gContours.selectAll("path")
+                .data(contours)
+                .join("path")
+                .attr("d", d3.geoPath(d3.geoIdentity().scale(width / (gridWidth - 1), height / (gridHeight - 1))))
+                .attr("class", "contour-path")
+                .attr("stroke", d => colorScale(d.value))
+                .attr("fill", "none");
+        }
+
+        function draw() {
+            // Setup scales and redraw contours only if needed (e.g. resize), but we'll do it once for simplicity here
+            
+            // --- Draw Paths ---
+            const lineGenerator = d3.line()
+                .x(d => xScale(d.x))
+                .y(d => yScale(d.y));
+
+            gPaths.selectAll(".path-sm")
+                .data([state.historySM])
+                .join("path")
+                .attr("class", "path-sm color-sm-path")
+                .attr("d", lineGenerator);
+
+            gPaths.selectAll(".path-nag")
+                .data([state.historyNAG])
+                .join("path")
+                .attr("class", "path-nag color-nag-path")
+                .attr("d", lineGenerator);
+
+            // --- Draw Vectors for the MOST RECENT step only to avoid clutter ---
+            gVectors.selectAll("*").remove();
+            
+            if (state.step > 0) {
+                const curSM = state.historySM[state.step];
+                const prevSM = state.historySM[state.step - 1];
+                const curNAG = state.historyNAG[state.step];
+                const prevNAG = state.historyNAG[state.step - 1];
+
+                // Scale vectors down for visualization
+                const vecScale = 1.5; 
+
+                // --- Standard Momentum Vectors ---
+                // Momentum component (from previous point)
+                const smMomEndX = xScale(prevSM.x) - (xScale(state.gamma * prevSM.vx) - xScale(0));
+                const smMomEndY = yScale(prevSM.y) - (yScale(state.gamma * prevSM.vy) - yScale(0));
+                
+                // Gradient component (starts at previous point)
+                const smGradEndX = xScale(prevSM.x) - (xScale(state.lr * curSM.gx * vecScale) - xScale(0));
+                const smGradEndY = yScale(prevSM.y) - (yScale(state.lr * curSM.gy * vecScale) - yScale(0));
+
+                // Draw SM Gradient
+                /*
+                gVectors.append("line")
+                    .attr("x1", xScale(prevSM.x)).attr("y1", yScale(prevSM.y))
+                    .attr("x2", smGradEndX).attr("y2", smGradEndY)
+                    .attr("class", "color-sm-grad")
+                    .attr("marker-end", "url(#arrowhead)");
+                */
+
+                // --- NAG Vectors ---
+                // 1. Path to Lookahead (Momentum component)
+                gVectors.append("line")
+                    .attr("x1", xScale(prevNAG.x)).attr("y1", yScale(prevNAG.y))
+                    .attr("x2", xScale(curNAG.lookaheadX)).attr("y2", yScale(curNAG.lookaheadY))
+                    .attr("class", "color-nag-lookahead-line")
+                    .attr("marker-end", "url(#arrowhead)");
+
+                // 2. Gradient at Lookahead
+                const nagGradEndX = xScale(curNAG.lookaheadX) - (xScale(state.lr * curNAG.gx * vecScale) - xScale(0));
+                const nagGradEndY = yScale(curNAG.lookaheadY) - (yScale(state.lr * curNAG.gy * vecScale) - yScale(0));
+
+                gVectors.append("line")
+                    .attr("x1", xScale(curNAG.lookaheadX)).attr("y1", yScale(curNAG.lookaheadY))
+                    .attr("x2", nagGradEndX).attr("y2", nagGradEndY)
+                    .attr("class", "color-nag-grad")
+                    .attr("marker-end", "url(#arrowhead)");
+            }
+
+            // --- Draw Points ---
+            // SM Points
+            gPoints.selectAll(".point-sm")
+                .data(state.historySM)
+                .join("circle")
+                .attr("class", "point-sm color-sm-point")
+                .attr("cx", d => xScale(d.x))
+                .attr("cy", d => yScale(d.y))
+                .attr("r", 4)
+                .on("mouseover", (e, d) => showTooltip(e, d, "Standard Momentum"))
+                .on("mouseout", hideTooltip);
+
+            // NAG Lookahead Points
+            const nagLookaheads = state.historyNAG.slice(1); // Exclude initial point
+            gPoints.selectAll(".point-nag-look")
+                .data(nagLookaheads)
+                .join("circle")
+                .attr("class", "point-nag-look color-nag-lookahead")
+                .attr("cx", d => xScale(d.lookaheadX))
+                .attr("cy", d => yScale(d.lookaheadY))
+                .attr("r", 3)
+                .on("mouseover", (e, d) => showTooltip(e, d, "NAG Lookahead Point", true))
+                .on("mouseout", hideTooltip);
+
+            // NAG Final Points
+            gPoints.selectAll(".point-nag")
+                .data(state.historyNAG)
+                .join("circle")
+                .attr("class", "point-nag color-nag-point")
+                .attr("cx", d => xScale(d.x))
+                .attr("cy", d => yScale(d.y))
+                .attr("r", 4)
+                .on("mouseover", (e, d) => showTooltip(e, d, "Nesterov (NAG)"))
+                .on("mouseout", hideTooltip);
+            
+            // Mark start point specially
+            gPoints.append("circle")
+                .attr("cx", xScale(state.startX))
+                .attr("cy", yScale(state.startY))
+                .attr("r", 6)
+                .attr("fill", "none")
+                .attr("stroke", "#334155")
+                .attr("stroke-width", 2);
+        }
+
+        function showTooltip(event, d, label, isLookahead = false) {
+            const l = isLookahead ? loss(d.lookaheadX, d.lookaheadY) : loss(d.x, d.y);
+            const xVal = isLookahead ? d.lookaheadX : d.x;
+            const yVal = isLookahead ? d.lookaheadY : d.y;
+
+            tooltip.transition().duration(100).style("opacity", .95);
+            tooltip.html(`
+                <strong>${label}</strong><br/>
+                x: ${xVal.toFixed(2)}<br/>
+                y: ${yVal.toFixed(2)}<br/>
+                Loss: ${l.toFixed(2)}
+            `)
+            .style("left", (event.pageX + 10) + "px")
+            .style("top", (event.pageY - 28) + "px");
+        }
+
+        function hideTooltip() {
+            tooltip.transition().duration(200).style("opacity", 0);
+        }
+
+        function updateStepCounter() {
+            document.getElementById('step-counter').innerText = `Step: ${state.step}`;
+        }
+
+        // --- Controls ---
+        
+        document.getElementById('lr-slider').addEventListener('input', (e) => {
+            state.lr = parseFloat(e.target.value);
+            document.getElementById('lr-val').innerText = state.lr.toFixed(2);
+            stopPlaying();
+            resetHistories();
+            draw();
+        });
+
+        document.getElementById('mom-slider').addEventListener('input', (e) => {
+            state.gamma = parseFloat(e.target.value);
+            document.getElementById('mom-val').innerText = state.gamma.toFixed(2);
+            stopPlaying();
+            resetHistories();
+            draw();
+        });
+
+        document.getElementById('btn-reset').addEventListener('click', () => {
+            stopPlaying();
+            resetHistories();
+            draw();
+        });
+
+        document.getElementById('btn-step').addEventListener('click', () => {
+            stopPlaying();
+            performStep();
+        });
+
+        const btnPlay = document.getElementById('btn-play');
+        btnPlay.addEventListener('click', () => {
+            if (state.isPlaying) {
+                stopPlaying();
+            } else {
+                startPlaying();
+            }
+        });
+
+        function startPlaying() {
+            if(state.step >= 50) resetHistories();
+            state.isPlaying = true;
+            btnPlay.innerHTML = `<svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"></path></svg> Pause`;
+            btnPlay.classList.replace('bg-purple-600', 'bg-amber-500');
+            btnPlay.classList.replace('hover:bg-purple-700', 'hover:bg-amber-600');
+            
+            state.playInterval = setInterval(() => {
+                performStep();
+                if (state.step >= 50) stopPlaying();
+            }, 250); // ms per frame
+        }
+
+        function stopPlaying() {
+            state.isPlaying = false;
+            clearInterval(state.playInterval);
+            btnPlay.innerHTML = `<svg class="w-4 h-4 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" fill-rule="evenodd"></path></svg> Play`;
+            btnPlay.classList.replace('bg-amber-500', 'bg-purple-600');
+            btnPlay.classList.replace('hover:bg-amber-600', 'hover:bg-purple-700');
+        }
+
+        // --- Initialization ---
+        function init() {
+            setupScales();
+            generateContours();
+            resetHistories();
+            draw();
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            setupScales();
+            generateContours(); // Recalculate contours for new dimensions
+            draw();
+        });
+
+        // Initialize on load
+        init();
+
+    </script>
+</body>
+</html>
